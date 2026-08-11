@@ -10,6 +10,7 @@ import time
 from datetime import datetime, time as dtime
 
 import pandas as pd
+import requests
 import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -66,11 +67,24 @@ if not symbol:
 if symbol != query_params.get("symbol", ""):
     st.query_params["symbol"] = symbol
 
+# قناة إشعارات ntfy — محفوظة داخل الرابط أيضاً، اكتبها مرة واحدة فقط
+default_topic = query_params.get("topic", "")
+ntfy_topic = st.text_input(
+    "قناة إشعارات ntfy (اختياري — اتركها فارغة لتعطيل الإشعارات)",
+    value=default_topic,
+).strip()
+
+if ntfy_topic != query_params.get("topic", ""):
+    st.query_params["topic"] = ntfy_topic
+
 # إعادة تحميل الصفحة تلقائياً كل 30 ثانية — الرابط هنا يحمل صراحةً
-# رمز السهم الحالي، حتى لو شريط العنوان لم يتحدث بعد، فالتحديث
-# التلقائي نفسه سيذهب دائماً لنفس السهم المختار، لا يرجع لـ INTC
+# رمز السهم الحالي (وقناة الإشعارات إن وُجدت)، حتى لو شريط العنوان
+# لم يتحدث بعد، فالتحديث التلقائي نفسه سيذهب دائماً لنفس الإعدادات
+_refresh_url = f"?symbol={symbol}"
+if ntfy_topic:
+    _refresh_url += f"&topic={ntfy_topic}"
 st.markdown(
-    f'<meta http-equiv="refresh" content="{REFRESH_SECONDS};url=?symbol={symbol}">',
+    f'<meta http-equiv="refresh" content="{REFRESH_SECONDS};url={_refresh_url}">',
     unsafe_allow_html=True,
 )
 
@@ -123,6 +137,27 @@ else:
     price_color = "#d0332f"
     arrow = "▼"
     sign = ""
+
+# منطق الإشعار: نرسل تنبيهاً مرة واحدة فقط عند لحظة الاختراق،
+# ثم "نُسلّح" النظام من جديد فقط بعد ما يرجع السعر تحت مستوى
+# الدخول ويخترقه مرة أخرى — لتفادي إرسال إشعار كل 30 ثانية
+if ntfy_topic:
+    armed = query_params.get("armed", "1") == "1"
+    if last_price < entry_price:
+        if query_params.get("armed") != "1":
+            st.query_params["armed"] = "1"
+    elif last_price >= entry_price and armed:
+        try:
+            requests.post(
+                f"https://ntfy.sh/{ntfy_topic}",
+                data=f"{symbol} اخترق مستوى الدخول {entry_price:.2f}$ — السعر الحالي {last_price:.2f}$".encode("utf-8"),
+                headers={"Title": f"اختراق {symbol}".encode("utf-8")},
+                timeout=5,
+            )
+            st.query_params["armed"] = "0"
+            st.success(f"✅ تم إرسال إشعار الاختراق لجوالك عبر قناة {ntfy_topic}")
+        except Exception:
+            st.warning("تعذّر إرسال الإشعار — تحقق من اتصال الإنترنت أو اسم القناة")
 
 st.markdown(
     f"<h2>شاشة {symbol} الحية — تتحدث كل {REFRESH_SECONDS} ثانية تلقائياً</h2>",
