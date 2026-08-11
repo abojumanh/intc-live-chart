@@ -205,30 +205,58 @@ st.markdown(
 # لقراءة السعر والوقت بدقة عند أي نقطة تلمسها
 show_crosshair = st.checkbox("إظهار الخطوط المتقاطعة (Crosshair)", value=True)
 
-# التكبير على الجوال بلمسة الإصبع غير موثوق دائماً على كل المتصفحات،
-# لذا نضيف تحكماً مباشراً وأكيداً بالمدة الزمنية المعروضة — أسهل
-# وأوضح من محاولة السحب بإصبعين
-window_choice = st.selectbox(
-    "المدة الزمنية المعروضة (بديل عن التكبير بالإصبع)",
-    ["آخر 5 دقائق", "آخر 15 دقيقة", "آخر 30 دقيقة", "آخر ساعة", "آخر ساعتين", "اليوم كامل"],
-    index=5,
-)
-window_minutes = {
-    "آخر 5 دقائق": 5,
-    "آخر 15 دقيقة": 15,
-    "آخر 30 دقيقة": 30,
-    "آخر ساعة": 60,
-    "آخر ساعتين": 120,
-    "اليوم كامل": None,
-}[window_choice]
+col_a, col_b = st.columns(2)
+
+with col_a:
+    # حجم الشمعة نفسها — كل شمعة تلخّص هذه المدة من الحركة، بدل
+    # شمعة كل دقيقة واحدة فقط. هذا يقلل عدد الشموع ويجعل الشارت
+    # أوضح بكثير، تماماً مثل تطبيقات التداول الاحترافية
+    candle_choice = st.selectbox(
+        "حجم الشمعة",
+        ["1 دقيقة", "5 دقائق", "15 دقيقة", "30 دقيقة", "60 دقيقة"],
+        index=1,
+    )
+    candle_rule = {
+        "1 دقيقة": "1min", "5 دقائق": "5min", "15 دقيقة": "15min",
+        "30 دقيقة": "30min", "60 دقيقة": "60min",
+    }[candle_choice]
+
+with col_b:
+    # التكبير على الجوال بلمسة الإصبع غير موثوق دائماً على كل المتصفحات،
+    # لذا نضيف تحكماً مباشراً وأكيداً بالمدة الزمنية المعروضة — أسهل
+    # وأوضح من محاولة السحب بإصبعين
+    window_choice = st.selectbox(
+        "المدة الزمنية المعروضة",
+        ["آخر 30 دقيقة", "آخر ساعة", "آخر ساعتين", "آخر 4 ساعات", "اليوم كامل"],
+        index=4,
+    )
+    window_minutes = {
+        "آخر 30 دقيقة": 30, "آخر ساعة": 60, "آخر ساعتين": 120,
+        "آخر 4 ساعات": 240, "اليوم كامل": None,
+    }[window_choice]
+
+
+def resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """يجمع شموع الدقيقة الواحدة إلى شموع أكبر (5 دقائق، 15 دقيقة، إلخ)."""
+    out = pd.DataFrame({
+        "Open": df["Open"].resample(rule).first(),
+        "High": df["High"].resample(rule).max(),
+        "Low": df["Low"].resample(rule).min(),
+        "Close": df["Close"].resample(rule).last(),
+        "Volume": df["Volume"].resample(rule).sum(),
+    }).dropna()
+    return out
+
+
+resampled = resample_ohlc(session, candle_rule) if candle_rule != "1min" else session
 
 if window_minutes is not None:
-    cutoff = session.index[-1] - pd.Timedelta(minutes=window_minutes)
-    chart_session = session[session.index >= cutoff]
+    cutoff = resampled.index[-1] - pd.Timedelta(minutes=window_minutes)
+    chart_session = resampled[resampled.index >= cutoff]
     if chart_session.empty:
-        chart_session = session
+        chart_session = resampled
 else:
-    chart_session = session
+    chart_session = resampled
 
 fig = make_subplots(
     rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
@@ -309,6 +337,9 @@ fig.update_layout(
     # التحريك بالسحب بدل "تكبير بالسحب" — يمنع مشكلة اختفاء الشارت
     # على الجوال عند لمسه وسحبه (كان يكبّر على نطاق ضيق جداً وفارغ)
     dragmode="pan",
+    # تنسيق واضح لصندوق المعلومات اللي يظهر لما تلمس الشارت،
+    # بخلفية بيضاء وحدود زرقاء متناسقة مع لون الخطوط المتقاطعة
+    hoverlabel=dict(bgcolor="white", font_size=14, font_color="black", bordercolor="#1E88E5"),
 )
 
 if show_crosshair:
