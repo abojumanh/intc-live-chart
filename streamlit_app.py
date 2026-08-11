@@ -1,12 +1,16 @@
 """
-شاشة INTC الحية — نسخة سحابية (Streamlit)
+شاشة الأسهم الحية — نسخة سحابية (Streamlit)
 ==========================================
-هذه النسخة مصممة لتعمل على خادم مجاني (Streamlit Cloud)
-بدل جهازك الشخصي، بحيث تبقى تعمل حتى لو أغلقت اللابتوب،
-وتفتحها من رابط واحد على جوالك من أي مكان.
+تعمل على خادم مجاني (Streamlit Cloud) بدل جهازك الشخصي،
+تبقى تعمل حتى لو أغلقت اللابتوب، وتفتحها من رابط واحد
+على جوالك من أي مكان.
+
+هذه النسخة تستخدم تحديثاً داخلياً حقيقياً (autorefresh) بدل
+إعادة تحميل الصفحة بالكامل، لذا حالة كل شيء (السهم المختار،
+وضع مراقبة كل الأسهم، وأي تنبيه أُرسل) تبقى محفوظة بدقة تامة،
+ولا تُرسل أي تنبيهات مكررة.
 """
 
-import time
 from datetime import datetime, time as dtime
 
 import pandas as pd
@@ -16,6 +20,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pytz
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 NY_TZ = pytz.timezone("America/New_York")
 MARKET_OPEN = dtime(9, 30)
@@ -23,6 +28,10 @@ OPENING_RANGE_MINUTES = 15
 REFRESH_SECONDS = 30
 
 st.set_page_config(page_title="شاشة حية", layout="wide")
+
+# تحديث داخلي حقيقي كل 30 ثانية — بلا إعادة تحميل الصفحة بالكامل،
+# وبلا فقدان أي حالة محفوظة (السهم، التنبيهات المُرسلة، إلخ)
+st_autorefresh(interval=REFRESH_SECONDS * 1000, key="auto_refresh")
 
 # اتجاه الكتابة من اليمين لليسار
 st.markdown(
@@ -34,7 +43,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# قائمة أسهمك المفضلة (الشريعة متوافقة) — تقدر تختار منها مباشرة
+# قائمة أسهمك المفضلة (الشريعة متوافقة)
 WATCHLIST = [
     "INTC", "NVDA", "XOM", "CVX", "GILD", "NEM", "FCX", "SLB",
     "PEP", "KO", "MRK", "OXY", "QCOM", "CSCO", "PG", "HAL",
@@ -42,50 +51,32 @@ WATCHLIST = [
 ]
 CUSTOM_OPTION = "سهم آخر (اكتبه يدوياً)"
 
-# نحفظ رمز السهم داخل رابط الصفحة نفسه، حتى يبقى محفوظاً
-# بعد كل تحديث تلقائي (30 ثانية) ولا يرجع تلقائياً إلى INTC
-query_params = st.query_params
-default_symbol = query_params.get("symbol", "INTC")
+# حالة "التسليح" لكل سهم — محفوظة في ذاكرة الجلسة (session_state)،
+# تبقى ثابتة طوال الجلسة ولا تُعاد للصفر إلا عند إغلاق التبويب فعلياً
+if "armed" not in st.session_state:
+    st.session_state.armed = {}
 
 col1, col2 = st.columns([2, 2])
 
 with col1:
     options = WATCHLIST + [CUSTOM_OPTION]
-    default_index = WATCHLIST.index(default_symbol) if default_symbol in WATCHLIST else len(WATCHLIST)
-    choice = st.selectbox("اختر من قائمتك", options, index=default_index)
+    choice = st.selectbox("اختر من قائمتك", options)
 
 with col2:
     if choice == CUSTOM_OPTION:
-        typed = st.text_input("أو اكتب رمز سهم آخر", value=default_symbol if default_symbol not in WATCHLIST else "")
-        symbol = typed.upper().strip() or default_symbol
+        typed = st.text_input("أو اكتب رمز سهم آخر", value="")
+        symbol = typed.upper().strip() or "INTC"
     else:
         symbol = choice
 
-if not symbol:
-    symbol = default_symbol
-
-if symbol != query_params.get("symbol", ""):
-    st.query_params["symbol"] = symbol
-
-# قناة إشعارات ntfy — محفوظة داخل الرابط أيضاً، اكتبها مرة واحدة فقط
-default_topic = query_params.get("topic", "")
 ntfy_topic = st.text_input(
     "قناة إشعارات ntfy (اختياري — اتركها فارغة لتعطيل الإشعارات)",
-    value=default_topic,
+    value="",
 ).strip()
 
-if ntfy_topic != query_params.get("topic", ""):
-    st.query_params["topic"] = ntfy_topic
-
-# إعادة تحميل الصفحة تلقائياً كل 30 ثانية — الرابط هنا يحمل صراحةً
-# رمز السهم الحالي (وقناة الإشعارات إن وُجدت)، حتى لو شريط العنوان
-# لم يتحدث بعد، فالتحديث التلقائي نفسه سيذهب دائماً لنفس الإعدادات
-_refresh_url = f"?symbol={symbol}"
-if ntfy_topic:
-    _refresh_url += f"&topic={ntfy_topic}"
-st.markdown(
-    f'<meta http-equiv="refresh" content="{REFRESH_SECONDS};url={_refresh_url}">',
-    unsafe_allow_html=True,
+watch_all = st.checkbox(
+    "راقب كل أسهم القائمة معاً وأرسل تنبيه لأي اختراق (يحتاج قناة ntfy أعلاه)",
+    value=False,
 )
 
 
@@ -113,6 +104,55 @@ def fetch_and_prepare(sym: str):
     return session, range_high, range_low
 
 
+def send_ntfy_alert(topic: str, title: str, message: str) -> bool:
+    try:
+        requests.post(
+            f"https://ntfy.sh/{topic}",
+            data=message.encode("utf-8"),
+            headers={"Title": title.encode("utf-8")},
+            timeout=5,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
+    """يرسل تنبيهاً مرة واحدة بالضبط عند لحظة الاختراق، ولا يكرره
+    إلا بعد ما يرجع السعر تحت مستوى الدخول ثم يخترق من جديد."""
+    was_armed = st.session_state.armed.get(sym, True)
+    if last < entry:
+        st.session_state.armed[sym] = True
+        return False
+    if last >= entry and was_armed:
+        msg = (
+            f"السعر الحالي: {last:.2f}$\n"
+            f"وقف الخسارة المقترح: {stop:.2f}$\n"
+            f"الهدف المقترح: {target:.2f}$\n"
+            f"⚠️ هذا تنبيه للمراجعة فقط، القرار بيدك"
+        )
+        if send_ntfy_alert(topic, f"اختراق صاعد ⬆️ {sym}", msg):
+            st.session_state.armed[sym] = False
+            return True
+    return False
+
+
+# مراقبة كل أسهم القائمة معاً (وضع اختياري)
+if ntfy_topic and watch_all:
+    sent_now = []
+    for wsym in WATCHLIST:
+        w_session, w_high, w_low = fetch_and_prepare(wsym)
+        if w_session is None:
+            continue
+        w_stop = (w_high + w_low) / 2
+        w_entry = w_high
+        w_target = w_entry + 2 * (w_entry - w_stop)
+        w_last = float(w_session["Close"].iloc[-1])
+        if check_breakout_and_notify(wsym, w_last, w_entry, w_stop, w_target, ntfy_topic):
+            sent_now.append(wsym)
+    if sent_now:
+        st.success(f"✅ تم إرسال تنبيه اختراق لجوالك عن: {', '.join(sent_now)}")
+
 session, range_high, range_low = fetch_and_prepare(symbol)
 
 if session is None:
@@ -121,6 +161,7 @@ if session is None:
 
 stop_loss = (range_high + range_low) / 2
 entry_price = range_high
+target_price = entry_price + 2 * (entry_price - stop_loss)
 open_price = float(session["Open"].iloc[0])
 last_price = float(session["Close"].iloc[-1])
 day_high = float(session["High"].max())
@@ -138,26 +179,10 @@ else:
     arrow = "▼"
     sign = ""
 
-# منطق الإشعار: نرسل تنبيهاً مرة واحدة فقط عند لحظة الاختراق،
-# ثم "نُسلّح" النظام من جديد فقط بعد ما يرجع السعر تحت مستوى
-# الدخول ويخترقه مرة أخرى — لتفادي إرسال إشعار كل 30 ثانية
-if ntfy_topic:
-    armed = query_params.get("armed", "1") == "1"
-    if last_price < entry_price:
-        if query_params.get("armed") != "1":
-            st.query_params["armed"] = "1"
-    elif last_price >= entry_price and armed:
-        try:
-            requests.post(
-                f"https://ntfy.sh/{ntfy_topic}",
-                data=f"{symbol} اخترق مستوى الدخول {entry_price:.2f}$ — السعر الحالي {last_price:.2f}$".encode("utf-8"),
-                headers={"Title": f"اختراق {symbol}".encode("utf-8")},
-                timeout=5,
-            )
-            st.query_params["armed"] = "0"
-            st.success(f"✅ تم إرسال إشعار الاختراق لجوالك عبر قناة {ntfy_topic}")
-        except Exception:
-            st.warning("تعذّر إرسال الإشعار — تحقق من اتصال الإنترنت أو اسم القناة")
+# تنبيه السهم المختار فقط (يعمل دائماً بغض النظر عن وضع "راقب كل الأسهم")
+if ntfy_topic and not watch_all:
+    if check_breakout_and_notify(symbol, last_price, entry_price, stop_loss, target_price, ntfy_topic):
+        st.success(f"✅ تم إرسال إشعار الاختراق لجوالك عبر قناة {ntfy_topic}")
 
 st.markdown(
     f"<h2>شاشة {symbol} الحية — تتحدث كل {REFRESH_SECONDS} ثانية تلقائياً</h2>",
