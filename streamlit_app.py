@@ -201,6 +201,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# خيار الخطوط المتقاطعة (Crosshair) — تتبع إصبعك/مؤشرك على الشارت
+# لقراءة السعر والوقت بدقة عند أي نقطة تلمسها
+show_crosshair = st.checkbox("إظهار الخطوط المتقاطعة (Crosshair)", value=True)
+
 fig = make_subplots(
     rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
     vertical_spacing=0.03,
@@ -265,6 +269,34 @@ fig.update_layout(
     xaxis_rangeslider_visible=False,
     height=650,
     template="plotly_white",
+    # يحافظ على أي تكبير/تحريك سويته يدوياً حتى بعد كل تحديث تلقائي،
+    # فلا "يختفي" أو يرجع للوضع الافتراضي كل 30 ثانية
+    uirevision="keep_zoom",
+    hovermode="x",
+    # التحريك بالسحب بدل "تكبير بالسحب" — يمنع مشكلة اختفاء الشارت
+    # على الجوال عند لمسه وسحبه (كان يكبّر على نطاق ضيق جداً وفارغ)
+    dragmode="pan",
 )
 
-st.plotly_chart(fig, use_container_width=True)
+if show_crosshair:
+    fig.update_xaxes(
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        spikedash="solid", spikecolor="gray", spikethickness=1,
+        row=1, col=1,
+    )
+    fig.update_yaxes(
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        spikedash="solid", spikecolor="gray", spikethickness=1,
+        row=1, col=1,
+    )
+
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "scrollZoom": True,       # يسمح بالتكبير بإصبعين (pinch) بأمان
+        "displaylogo": False,
+        "modeBarButtonsToAdd": ["resetScale2d"],
+    },
+)
+st.caption("💡 اسحب إصبعك للتحريك، وبإصبعين للتكبير/التصغير. اضغط ضغطتين متتاليتين لإعادة الشارت لوضعه الطبيعي.")
