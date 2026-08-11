@@ -205,70 +205,103 @@ st.markdown(
 # لقراءة السعر والوقت بدقة عند أي نقطة تلمسها
 show_crosshair = st.checkbox("إظهار الخطوط المتقاطعة (Crosshair)", value=True)
 
+# التكبير على الجوال بلمسة الإصبع غير موثوق دائماً على كل المتصفحات،
+# لذا نضيف تحكماً مباشراً وأكيداً بالمدة الزمنية المعروضة — أسهل
+# وأوضح من محاولة السحب بإصبعين
+window_choice = st.selectbox(
+    "المدة الزمنية المعروضة (بديل عن التكبير بالإصبع)",
+    ["آخر 5 دقائق", "آخر 15 دقيقة", "آخر 30 دقيقة", "آخر ساعة", "آخر ساعتين", "اليوم كامل"],
+    index=5,
+)
+window_minutes = {
+    "آخر 5 دقائق": 5,
+    "آخر 15 دقيقة": 15,
+    "آخر 30 دقيقة": 30,
+    "آخر ساعة": 60,
+    "آخر ساعتين": 120,
+    "اليوم كامل": None,
+}[window_choice]
+
+if window_minutes is not None:
+    cutoff = session.index[-1] - pd.Timedelta(minutes=window_minutes)
+    chart_session = session[session.index >= cutoff]
+    if chart_session.empty:
+        chart_session = session
+else:
+    chart_session = session
+
 fig = make_subplots(
     rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
     vertical_spacing=0.03,
 )
 
 fig.add_trace(go.Candlestick(
-    x=session.index, open=session["Open"], high=session["High"],
-    low=session["Low"], close=session["Close"], name=symbol,
+    x=chart_session.index, open=chart_session["Open"], high=chart_session["High"],
+    low=chart_session["Low"], close=chart_session["Close"], name=symbol,
 ), row=1, col=1)
 
 fig.add_hline(y=entry_price, line_dash="dash", line_color="red", row=1, col=1)
 fig.add_annotation(
-    x=session.index[len(session) // 2], y=entry_price,
+    x=chart_session.index[len(chart_session) // 2], y=entry_price,
     text=f"⬆️ دخول عند: {entry_price:.2f}$", showarrow=False,
     bgcolor="#0a8a3f", font=dict(color="white", size=12), yshift=12, row=1, col=1,
 )
 
 fig.add_hline(y=range_low, line_dash="dash", line_color="green", row=1, col=1)
 fig.add_annotation(
-    x=session.index[-1], y=range_low,
+    x=chart_session.index[-1], y=range_low,
     text=f"$دعم: {range_low:.2f}", showarrow=False,
     font=dict(color="gray", size=11), yshift=-12, xanchor="right", row=1, col=1,
 )
 
 fig.add_hline(y=stop_loss, line_dash="dot", line_color="#d0332f", row=1, col=1)
 fig.add_annotation(
-    x=session.index[len(session) // 2], y=stop_loss,
+    x=chart_session.index[len(chart_session) // 2], y=stop_loss,
     text=f"⛔ توقف عند: {stop_loss:.2f}$", showarrow=False,
     bgcolor="#d0332f", font=dict(color="white", size=12), yshift=-12, row=1, col=1,
 )
 
+# تسميات الافتتاح/الأعلى/الأدنى تُحسب من المدة المعروضة حالياً على
+# الشارت (لا من اليوم كامل دائماً)، حتى تبقى ضمن نطاق الشارت المرئي
+chart_open = float(chart_session["Open"].iloc[0])
+chart_high = float(chart_session["High"].max())
+chart_low = float(chart_session["Low"].min())
+
 fig.add_annotation(
-    x=session.index[0], y=open_price,
-    text=f"$افتتاح: {open_price:.2f}", showarrow=True, arrowhead=2,
+    x=chart_session.index[0], y=chart_open,
+    text=f"$افتتاح: {chart_open:.2f}", showarrow=True, arrowhead=2,
     font=dict(size=11), ax=-40, ay=-20, row=1, col=1,
 )
 
-idx_high = session["High"].idxmax()
+idx_high = chart_session["High"].idxmax()
 fig.add_annotation(
-    x=idx_high, y=day_high,
-    text=f"$أعلى سعر: {day_high:.2f}", showarrow=True, arrowhead=2,
+    x=idx_high, y=chart_high,
+    text=f"$أعلى سعر: {chart_high:.2f}", showarrow=True, arrowhead=2,
     font=dict(size=11), ax=0, ay=-30, row=1, col=1,
 )
 
-idx_low = session["Low"].idxmin()
+idx_low = chart_session["Low"].idxmin()
 fig.add_annotation(
-    x=idx_low, y=day_low,
-    text=f"$أدنى سعر: {day_low:.2f}", showarrow=True, arrowhead=2,
+    x=idx_low, y=chart_low,
+    text=f"$أدنى سعر: {chart_low:.2f}", showarrow=True, arrowhead=2,
     font=dict(size=11), ax=0, ay=30, row=1, col=1,
 )
 
 fig.add_annotation(
-    x=session.index[-1], y=last_price,
+    x=chart_session.index[-1], y=last_price,
     text=f"$إغلاق حالي: {last_price:.2f}", showarrow=True, arrowhead=2,
     font=dict(size=11, color=price_color), ax=40, ay=-20, row=1, col=1,
 )
 
-colors = ["green" if c >= o else "red" for o, c in zip(session["Open"], session["Close"])]
-fig.add_trace(go.Bar(x=session.index, y=session["Volume"], marker_color=colors, name="الحجم"), row=2, col=1)
+colors = ["green" if c >= o else "red" for o, c in zip(chart_session["Open"], chart_session["Close"])]
+fig.add_trace(go.Bar(x=chart_session.index, y=chart_session["Volume"], marker_color=colors, name="الحجم"), row=2, col=1)
 
 fig.update_layout(
     xaxis_rangeslider_visible=False,
     height=650,
     template="plotly_white",
+    margin=dict(l=10, r=10, t=20, b=10),
+    font=dict(size=13),
     # يحافظ على أي تكبير/تحريك سويته يدوياً حتى بعد كل تحديث تلقائي،
     # فلا "يختفي" أو يرجع للوضع الافتراضي كل 30 ثانية
     uirevision="keep_zoom",
@@ -294,9 +327,13 @@ st.plotly_chart(
     fig,
     use_container_width=True,
     config={
-        "scrollZoom": True,       # يسمح بالتكبير بإصبعين (pinch) بأمان
+        "scrollZoom": True,
         "displaylogo": False,
-        "modeBarButtonsToAdd": ["resetScale2d"],
+        "displayModeBar": True,
+        "modeBarButtonsToAdd": ["zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"],
     },
 )
-st.caption("💡 اسحب إصبعك للتحريك، وبإصبعين للتكبير/التصغير. اضغط ضغطتين متتاليتين لإعادة الشارت لوضعه الطبيعي.")
+st.caption(
+    "💡 الطريقة الأضمن للتكبير على الجوال: استخدم قائمة \"المدة الزمنية المعروضة\" أعلاه. "
+    "بديلاً، جرّب أزرار + و − أعلى يمين الشارت، أو السحب بإصبعين."
+)
