@@ -39,7 +39,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-symbol = st.text_input("رمز السهم", value="INTC").upper().strip()
+# نحفظ رمز السهم داخل رابط الصفحة نفسه، حتى يبقى محفوظاً
+# بعد كل تحديث تلقائي (30 ثانية) ولا يرجع تلقائياً إلى INTC
+query_params = st.query_params
+default_symbol = query_params.get("symbol", "INTC")
+
+symbol = st.text_input("رمز السهم", value=default_symbol).upper().strip()
+
+if symbol and symbol != default_symbol:
+    st.query_params["symbol"] = symbol
 
 
 def fetch_and_prepare(sym: str):
