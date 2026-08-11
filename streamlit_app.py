@@ -23,12 +23,6 @@ REFRESH_SECONDS = 30
 
 st.set_page_config(page_title="شاشة حية", layout="wide")
 
-# إعادة تحميل الصفحة تلقائياً كل 30 ثانية (بدون أي إضافات خارجية)
-st.markdown(
-    f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">',
-    unsafe_allow_html=True,
-)
-
 # اتجاه الكتابة من اليمين لليسار
 st.markdown(
     """
@@ -39,15 +33,46 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# قائمة أسهمك المفضلة (الشريعة متوافقة) — تقدر تختار منها مباشرة
+WATCHLIST = [
+    "INTC", "NVDA", "XOM", "CVX", "GILD", "NEM", "FCX", "SLB",
+    "PEP", "KO", "MRK", "OXY", "QCOM", "CSCO", "PG", "HAL",
+    "DVN", "EOG", "CF", "DD",
+]
+CUSTOM_OPTION = "سهم آخر (اكتبه يدوياً)"
+
 # نحفظ رمز السهم داخل رابط الصفحة نفسه، حتى يبقى محفوظاً
 # بعد كل تحديث تلقائي (30 ثانية) ولا يرجع تلقائياً إلى INTC
 query_params = st.query_params
 default_symbol = query_params.get("symbol", "INTC")
 
-symbol = st.text_input("رمز السهم", value=default_symbol).upper().strip()
+col1, col2 = st.columns([2, 2])
 
-if symbol and symbol != default_symbol:
+with col1:
+    options = WATCHLIST + [CUSTOM_OPTION]
+    default_index = WATCHLIST.index(default_symbol) if default_symbol in WATCHLIST else len(WATCHLIST)
+    choice = st.selectbox("اختر من قائمتك", options, index=default_index)
+
+with col2:
+    if choice == CUSTOM_OPTION:
+        typed = st.text_input("أو اكتب رمز سهم آخر", value=default_symbol if default_symbol not in WATCHLIST else "")
+        symbol = typed.upper().strip() or default_symbol
+    else:
+        symbol = choice
+
+if not symbol:
+    symbol = default_symbol
+
+if symbol != query_params.get("symbol", ""):
     st.query_params["symbol"] = symbol
+
+# إعادة تحميل الصفحة تلقائياً كل 30 ثانية — الرابط هنا يحمل صراحةً
+# رمز السهم الحالي، حتى لو شريط العنوان لم يتحدث بعد، فالتحديث
+# التلقائي نفسه سيذهب دائماً لنفس السهم المختار، لا يرجع لـ INTC
+st.markdown(
+    f'<meta http-equiv="refresh" content="{REFRESH_SECONDS};url=?symbol={symbol}">',
+    unsafe_allow_html=True,
+)
 
 
 def fetch_and_prepare(sym: str):
