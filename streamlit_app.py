@@ -201,10 +201,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# خيار الخطوط المتقاطعة (Crosshair) — تتبع إصبعك/مؤشرك على الشارت
-# لقراءة السعر والوقت بدقة عند أي نقطة تلمسها
-show_crosshair = st.checkbox("إظهار الخطوط المتقاطعة (Crosshair)", value=True)
-
 col_a, col_b = st.columns(2)
 
 with col_a:
@@ -337,22 +333,8 @@ fig.update_layout(
     # التحريك بالسحب بدل "تكبير بالسحب" — يمنع مشكلة اختفاء الشارت
     # على الجوال عند لمسه وسحبه (كان يكبّر على نطاق ضيق جداً وفارغ)
     dragmode="pan",
-    # تنسيق واضح لصندوق المعلومات اللي يظهر لما تلمس الشارت،
-    # بخلفية بيضاء وحدود زرقاء متناسقة مع لون الخطوط المتقاطعة
     hoverlabel=dict(bgcolor="white", font_size=14, font_color="black", bordercolor="#1E88E5"),
 )
-
-if show_crosshair:
-    fig.update_xaxes(
-        showspikes=True, spikemode="across", spikesnap="cursor",
-        spikedash="solid", spikecolor="gray", spikethickness=1,
-        row=1, col=1,
-    )
-    fig.update_yaxes(
-        showspikes=True, spikemode="across", spikesnap="cursor",
-        spikedash="solid", spikecolor="gray", spikethickness=1,
-        row=1, col=1,
-    )
 
 st.plotly_chart(
     fig,
