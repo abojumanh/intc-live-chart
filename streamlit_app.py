@@ -115,46 +115,59 @@ if watch_all:
             "open": w_open, "last": w_last,
         }
 
-    # لوحة ألوان: كل سهم بخلفية خضراء (صاعد) أو حمراء (هابط) اليوم،
-    # للمسح السريع بنظرة واحدة قبل ما تختار من القائمة تحتها
-    st.markdown("###### 🎨 لوحة الأسهم (نظرة سريعة)")
+# السهم المختار حالياً — محفوظ في ذاكرة الجلسة، يبقى ثابتاً حتى
+# يُغيَّر بضغطة على لوحة الألوان أو من القائمة العادية
+if "selected_symbol" not in st.session_state:
+    st.session_state.selected_symbol = "INTC"
+
+if watch_all:
+    # لوحة ألوان تفاعلية: كل سهم زر حقيقي بخلفية خضراء (صاعد) أو
+    # حمراء (هابط) اليوم — اضغط على أي مربع ليصير هو السهم المعروض
+    # في الشارت والتحليل تحت مباشرة
+    st.markdown("###### 🎨 لوحة الأسهم (اضغط على أي سهم لعرضه)")
     board_cols = st.columns(4)
+    style_blocks = []
     for i, wsym in enumerate(WATCHLIST):
         with board_cols[i % 4]:
+            tile_key = f"tile_{wsym}"
             if wsym in watch_data:
                 d = watch_data[wsym]
                 chg_pct = ((d["last"] - d["open"]) / d["open"]) * 100 if d["open"] else 0
                 bg = "#0a8a3f" if chg_pct >= 0 else "#d0332f"
-                st.markdown(
-                    f"""
-                    <div style="background:{bg}; color:white; border-radius:8px;
-                                padding:6px 4px; text-align:center; margin-bottom:6px; font-size:13px;">
-                        <b>{wsym}</b><br>{d['last']:.2f}$<br>{chg_pct:+.1f}%
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                label = f"{wsym}\n{d['last']:.2f}$\n{chg_pct:+.1f}%"
             else:
-                st.markdown(
-                    f"""<div style="background:#ccc; color:#333; border-radius:8px;
-                        padding:6px 4px; text-align:center; margin-bottom:6px; font-size:13px;">
-                        <b>{wsym}</b><br>—</div>""",
-                    unsafe_allow_html=True,
-                )
-    st.caption("💡 اللوحة للعرض فقط — اختر سهمك من القائمة تحتها")
+                bg = "#9e9e9e"
+                label = f"{wsym}\n—"
 
-col1, col2 = st.columns([2, 2])
+            with st.container(key=tile_key):
+                if st.button(label, key=f"btn_{wsym}", use_container_width=True):
+                    st.session_state.selected_symbol = wsym
 
-with col1:
-    options = WATCHLIST + [CUSTOM_OPTION]
-    choice = st.selectbox("اختر من قائمتك", options)
+            style_blocks.append(
+                f".st-key-{tile_key} button {{background-color:{bg} !important; "
+                f"color:white !important; border:none !important; white-space:pre-line;}}"
+            )
 
-with col2:
-    if choice == CUSTOM_OPTION:
-        typed = st.text_input("أو اكتب رمز سهم آخر", value="")
-        symbol = typed.upper().strip() or "INTC"
-    else:
-        symbol = choice
+    st.markdown(f"<style>{''.join(style_blocks)}</style>", unsafe_allow_html=True)
+
+    custom_typed = st.text_input("أو اكتب رمز سهم آخر غير موجود في اللوحة", value="")
+    if custom_typed.strip():
+        st.session_state.selected_symbol = custom_typed.upper().strip()
+
+    symbol = st.session_state.selected_symbol
+else:
+    col1, col2 = st.columns([2, 2])
+    with col1:
+        options = WATCHLIST + [CUSTOM_OPTION]
+        default_index = options.index(st.session_state.selected_symbol) if st.session_state.selected_symbol in WATCHLIST else 0
+        choice = st.selectbox("اختر من قائمتك", options, index=default_index)
+    with col2:
+        if choice == CUSTOM_OPTION:
+            typed = st.text_input("أو اكتب رمز سهم آخر", value="")
+            symbol = typed.upper().strip() or "INTC"
+        else:
+            symbol = choice
+    st.session_state.selected_symbol = symbol
 
 
 
