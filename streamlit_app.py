@@ -69,10 +69,18 @@ with col2:
     else:
         symbol = choice
 
-ntfy_topic = st.text_input(
-    "قناة إشعارات ntfy (اختياري — اتركها فارغة لتعطيل الإشعارات)",
-    value="",
-).strip()
+# قائمة قنوات ntfy المحفوظة — اختر منها مباشرة، أو اترك بدون إشعارات،
+# أو اكتب قناة جديدة يدوياً
+NTFY_CHANNELS = ["بدون إشعارات (تعطيل)", "safar-nvda-alerts-9284", "قناة أخرى (اكتبها يدوياً)"]
+
+ntfy_choice = st.selectbox("قناة إشعارات ntfy", NTFY_CHANNELS)
+
+if ntfy_choice == "قناة أخرى (اكتبها يدوياً)":
+    ntfy_topic = st.text_input("اكتب اسم القناة", value="").strip()
+elif ntfy_choice == "بدون إشعارات (تعطيل)":
+    ntfy_topic = ""
+else:
+    ntfy_topic = ntfy_choice
 
 watch_all = st.checkbox(
     "راقب كل أسهم القائمة معاً وأرسل تنبيه لأي اختراق (يحتاج قناة ntfy أعلاه)",
