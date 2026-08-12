@@ -239,6 +239,25 @@ with col_b:
         "آخر 4 ساعات": 240, "اليوم كامل": None,
     }[window_choice]
 
+col_c, col_d = st.columns(2)
+
+with col_c:
+    # المتوسط المتحرك البسيط (SMA) — خط يلخّص اتجاه السعر العام،
+    # لكنه مؤشر "متأخر" (يتبع السعر بعد حدوثه)، أنسب للمدى المتوسط
+    # أكثر من مضاربة اليوم الواحد اللي تعتمد استراتيجيتك عليها
+    show_sma = st.checkbox("إظهار المتوسط المتحرك (SMA)", value=False)
+
+with col_d:
+    sma_period = st.number_input(
+        "عدد الشموع في المتوسط", min_value=2, max_value=100, value=20, step=1,
+        disabled=not show_sma,
+    )
+
+# VWAP (متوسط السعر المرجّح بالحجم) — أنسب بكثير من SMA لاستراتيجية
+# اختراق نطاق الافتتاح، لأنه يعكس "السعر العادل" الحقيقي لليوم بناءً
+# على أين تم تداول أغلب الكميات، ويبدأ من أول دقيقة في السوق
+show_vwap = st.checkbox("إظهار VWAP (متوسط السعر المرجّح بالحجم)", value=True)
+
 
 def resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """يجمع شموع الدقيقة الواحدة إلى شموع أكبر (5 دقائق، 15 دقيقة، إلخ)."""
@@ -253,6 +272,16 @@ def resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
 
 
 resampled = resample_ohlc(session, candle_rule) if candle_rule != "1min" else session
+
+# نحسب المؤشرات على كامل بيانات اليوم أولاً (قبل قص المدة المعروضة)،
+# حتى تكون صحيحة من أول نقطة تظهر على الشارت ولا تبدأ بفراغ في
+# بداية النافذة الزمنية المختارة
+if show_sma:
+    resampled["SMA"] = resampled["Close"].rolling(window=int(sma_period)).mean()
+
+if show_vwap:
+    typical_price = (resampled["High"] + resampled["Low"] + resampled["Close"]) / 3
+    resampled["VWAP"] = (typical_price * resampled["Volume"]).cumsum() / resampled["Volume"].cumsum()
 
 if window_minutes is not None:
     cutoff = resampled.index[-1] - pd.Timedelta(minutes=window_minutes)
@@ -271,6 +300,20 @@ fig.add_trace(go.Candlestick(
     x=chart_session.index, open=chart_session["Open"], high=chart_session["High"],
     low=chart_session["Low"], close=chart_session["Close"], name=symbol,
 ), row=1, col=1)
+
+if show_sma and "SMA" in chart_session.columns:
+    fig.add_trace(go.Scatter(
+        x=chart_session.index, y=chart_session["SMA"],
+        mode="lines", name=f"SMA {int(sma_period)}",
+        line=dict(color="#FF8C00", width=2),
+    ), row=1, col=1)
+
+if show_vwap and "VWAP" in chart_session.columns:
+    fig.add_trace(go.Scatter(
+        x=chart_session.index, y=chart_session["VWAP"],
+        mode="lines", name="VWAP",
+        line=dict(color="#8E24AA", width=2, dash="dot"),
+    ), row=1, col=1)
 
 fig.add_hline(y=entry_price, line_dash="dash", line_color="red", row=1, col=1)
 fig.add_annotation(
