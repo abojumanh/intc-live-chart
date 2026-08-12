@@ -127,7 +127,8 @@ def send_ntfy_alert(topic: str, title: str, message: str) -> bool:
 
 def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
     """يرسل تنبيهاً مرة واحدة بالضبط عند لحظة الاختراق، ولا يكرره
-    إلا بعد ما يرجع السعر تحت مستوى الدخول ثم يخترق من جديد."""
+    إلا بعد ما يرجع السعر تحت مستوى الدخول ثم يخترق من جديد.
+    يسجّل أيضاً كل اختراق فعلي في سجل الصفقات."""
     was_armed = st.session_state.armed.get(sym, True)
     if last < entry:
         st.session_state.armed[sym] = True
@@ -141,8 +142,42 @@ def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, 
         )
         if send_ntfy_alert(topic, f"اختراق صاعد ⬆️ {sym}", msg):
             st.session_state.armed[sym] = False
+            st.session_state.trade_log.insert(0, {
+                "الوقت": datetime.now(NY_TZ).strftime("%H:%M:%S"),
+                "السهم": sym,
+                "النوع": "اختراق صاعد ⬆️",
+                "السعر": f"{last:.2f}$",
+            })
             return True
     return False
+
+
+def check_stop_proximity_and_notify(sym: str, last: float, entry: float, stop: float, topic: str):
+    """ينبّه لمرة واحدة لما السعر يقترب من وقف الخسارة (يصل لمنتصف
+    المسافة بين الدخول والوقف)، حتى تنتبه قبل ما يُضرب فعلياً."""
+    halfway = entry - (entry - stop) / 2
+    key = f"stopwarn_{sym}"
+    already_warned = st.session_state.armed.get(key, False)
+    if last > halfway:
+        st.session_state.armed[key] = False
+        return False
+    if last <= halfway and not already_warned:
+        msg = f"السعر الحالي: {last:.2f}$ — اقترب من وقف الخسارة ({stop:.2f}$)"
+        if send_ntfy_alert(topic, f"⚠️ اقتراب من وقف الخسارة {sym}", msg):
+            st.session_state.armed[key] = True
+            st.session_state.trade_log.insert(0, {
+                "الوقت": datetime.now(NY_TZ).strftime("%H:%M:%S"),
+                "السهم": sym,
+                "النوع": "⚠️ اقتراب من الوقف",
+                "السعر": f"{last:.2f}$",
+            })
+            return True
+    return False
+
+
+# سجل بسيط لكل اختراق أو تنبيه صار خلال الجلسة
+if "trade_log" not in st.session_state:
+    st.session_state.trade_log = []
 
 
 # مراقبة كل أسهم القائمة معاً (وضع اختياري)
@@ -158,6 +193,7 @@ if ntfy_topic and watch_all:
         w_last = float(w_session["Close"].iloc[-1])
         if check_breakout_and_notify(wsym, w_last, w_entry, w_stop, w_target, ntfy_topic):
             sent_now.append(wsym)
+        check_stop_proximity_and_notify(wsym, w_last, w_entry, w_stop, ntfy_topic)
     if sent_now:
         st.success(f"✅ تم إرسال تنبيه اختراق لجوالك عن: {', '.join(sent_now)}")
 
@@ -191,6 +227,7 @@ else:
 if ntfy_topic and not watch_all:
     if check_breakout_and_notify(symbol, last_price, entry_price, stop_loss, target_price, ntfy_topic):
         st.success(f"✅ تم إرسال إشعار الاختراق لجوالك عبر قناة {ntfy_topic}")
+    check_stop_proximity_and_notify(symbol, last_price, entry_price, stop_loss, ntfy_topic)
 
 st.markdown(
     f"<h2>شاشة {symbol} الحية — تتحدث كل {REFRESH_SECONDS} ثانية تلقائياً</h2>",
@@ -208,6 +245,40 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# نسبة المخاطرة إلى العائد المتوقعة بناءً على مستويات الدخول
+# والوقف والهدف المحسوبة تلقائياً
+risk_amount = entry_price - stop_loss
+reward_amount = target_price - entry_price
+rr_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
+st.info(f"⚖️ نسبة المخاطرة إلى العائد: **1 : {rr_ratio:.1f}** — (مخاطرة {risk_amount:.2f}$ مقابل عائد محتمل {reward_amount:.2f}$)")
+
+# حاسبة صفقتك الفعلية — أدخل الكمية وسعر دخولك الحقيقي لترى ربحك/خسارتك الحية
+with st.expander("🧮 حاسبة صفقتي (اختياري)"):
+    calc_col1, calc_col2 = st.columns(2)
+    with calc_col1:
+        my_shares = st.number_input("عدد الأسهم اللي اشتريتها", min_value=0.0, value=0.0, step=1.0)
+    with calc_col2:
+        my_entry = st.number_input("سعر دخولك الفعلي ($)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+
+    if my_shares > 0 and my_entry > 0:
+        pnl_dollars = (last_price - my_entry) * my_shares
+        pnl_pct = ((last_price - my_entry) / my_entry) * 100
+        pnl_color = "#0a8a3f" if pnl_dollars >= 0 else "#d0332f"
+        pnl_sign = "+" if pnl_dollars >= 0 else ""
+        st.markdown(
+            f"""
+            <div style="font-size:32px; font-weight:bold; color:{pnl_color};">
+                {pnl_sign}{pnl_dollars:.2f}$ ({pnl_sign}{pnl_pct:.2f}%)
+            </div>
+            <div style="font-size:14px; color:gray;">
+                القيمة الحالية: {(last_price * my_shares):.2f}$ — التكلفة الأصلية: {(my_entry * my_shares):.2f}$
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("أدخل الكمية وسعر الدخول لحساب ربحك أو خسارتك الحالية تلقائياً")
 
 col_a, col_b = st.columns(2)
 
@@ -401,3 +472,17 @@ st.caption(
     "💡 الطريقة الأضمن للتكبير على الجوال: استخدم قائمة \"المدة الزمنية المعروضة\" أعلاه. "
     "بديلاً، جرّب أزرار + و − أعلى يمين الشارت، أو السحب بإصبعين."
 )
+
+# سجل الصفقات — كل اختراق أو تنبيه اقتراب من الوقف صار خلال الجلسة
+st.markdown("### 📋 سجل التنبيهات (هذه الجلسة)")
+if st.session_state.trade_log:
+    st.dataframe(
+        pd.DataFrame(st.session_state.trade_log),
+        use_container_width=True,
+        hide_index=True,
+    )
+    if st.button("🗑️ مسح السجل"):
+        st.session_state.trade_log = []
+        st.rerun()
+else:
+    st.caption("لا توجد تنبيهات بعد خلال هذه الجلسة.")
