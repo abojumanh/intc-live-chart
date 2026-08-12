@@ -56,19 +56,6 @@ CUSTOM_OPTION = "سهم آخر (اكتبه يدوياً)"
 if "armed" not in st.session_state:
     st.session_state.armed = {}
 
-col1, col2 = st.columns([2, 2])
-
-with col1:
-    options = WATCHLIST + [CUSTOM_OPTION]
-    choice = st.selectbox("اختر من قائمتك", options)
-
-with col2:
-    if choice == CUSTOM_OPTION:
-        typed = st.text_input("أو اكتب رمز سهم آخر", value="")
-        symbol = typed.upper().strip() or "INTC"
-    else:
-        symbol = choice
-
 # قائمة قنوات ntfy المحفوظة — اختر منها مباشرة، أو اترك بدون إشعارات،
 # أو اكتب قناة جديدة يدوياً
 NTFY_CHANNELS = ["بدون إشعارات (تعطيل)", "safar-nvda-alerts-9284", "قناة أخرى (اكتبها يدوياً)"]
@@ -110,6 +97,66 @@ def fetch_and_prepare(sym: str):
     range_high = float(opening_window["High"].max())
     range_low = float(opening_window["Low"].min())
     return session, range_high, range_low
+
+
+# نجيب بيانات كل الأسهم مرة واحدة فقط (مو مرتين) لو "راقب كل الأسهم"
+# مفعّلة — نفس البيانات تُستخدم للوحة الألوان ولفحص الاختراقات معاً،
+# لتفادي مضاعفة عدد الطلبات لياهو فاينانس بلا داعٍ
+watch_data = {}
+if watch_all:
+    for wsym in WATCHLIST:
+        w_session, w_high, w_low = fetch_and_prepare(wsym)
+        if w_session is None:
+            continue
+        w_open = float(w_session["Open"].iloc[0])
+        w_last = float(w_session["Close"].iloc[-1])
+        watch_data[wsym] = {
+            "session": w_session, "high": w_high, "low": w_low,
+            "open": w_open, "last": w_last,
+        }
+
+    # لوحة ألوان: كل سهم بخلفية خضراء (صاعد) أو حمراء (هابط) اليوم،
+    # للمسح السريع بنظرة واحدة قبل ما تختار من القائمة تحتها
+    st.markdown("###### 🎨 لوحة الأسهم (نظرة سريعة)")
+    board_cols = st.columns(4)
+    for i, wsym in enumerate(WATCHLIST):
+        with board_cols[i % 4]:
+            if wsym in watch_data:
+                d = watch_data[wsym]
+                chg_pct = ((d["last"] - d["open"]) / d["open"]) * 100 if d["open"] else 0
+                bg = "#0a8a3f" if chg_pct >= 0 else "#d0332f"
+                st.markdown(
+                    f"""
+                    <div style="background:{bg}; color:white; border-radius:8px;
+                                padding:6px 4px; text-align:center; margin-bottom:6px; font-size:13px;">
+                        <b>{wsym}</b><br>{d['last']:.2f}$<br>{chg_pct:+.1f}%
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"""<div style="background:#ccc; color:#333; border-radius:8px;
+                        padding:6px 4px; text-align:center; margin-bottom:6px; font-size:13px;">
+                        <b>{wsym}</b><br>—</div>""",
+                    unsafe_allow_html=True,
+                )
+    st.caption("💡 اللوحة للعرض فقط — اختر سهمك من القائمة تحتها")
+
+col1, col2 = st.columns([2, 2])
+
+with col1:
+    options = WATCHLIST + [CUSTOM_OPTION]
+    choice = st.selectbox("اختر من قائمتك", options)
+
+with col2:
+    if choice == CUSTOM_OPTION:
+        typed = st.text_input("أو اكتب رمز سهم آخر", value="")
+        symbol = typed.upper().strip() or "INTC"
+    else:
+        symbol = choice
+
+
 
 
 def send_ntfy_alert(topic: str, title: str, message: str) -> bool:
@@ -180,17 +227,16 @@ if "trade_log" not in st.session_state:
     st.session_state.trade_log = []
 
 
-# مراقبة كل أسهم القائمة معاً (وضع اختياري)
+# مراقبة كل أسهم القائمة معاً (وضع اختياري) — نستخدم watch_data
+# الجاهزة أعلاه (نفس البيانات المستخدمة للوحة الألوان)، بلا أي
+# طلب إضافي مكرر لياهو فاينانس
 if ntfy_topic and watch_all:
     sent_now = []
-    for wsym in WATCHLIST:
-        w_session, w_high, w_low = fetch_and_prepare(wsym)
-        if w_session is None:
-            continue
-        w_stop = (w_high + w_low) / 2
-        w_entry = w_high
+    for wsym, d in watch_data.items():
+        w_stop = (d["high"] + d["low"]) / 2
+        w_entry = d["high"]
         w_target = w_entry + 2 * (w_entry - w_stop)
-        w_last = float(w_session["Close"].iloc[-1])
+        w_last = d["last"]
         if check_breakout_and_notify(wsym, w_last, w_entry, w_stop, w_target, ntfy_topic):
             sent_now.append(wsym)
         check_stop_proximity_and_notify(wsym, w_last, w_entry, w_stop, ntfy_topic)
