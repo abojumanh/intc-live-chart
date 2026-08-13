@@ -21,11 +21,21 @@ from plotly.subplots import make_subplots
 import pytz
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+from tradingview_ta import TA_Handler, Interval
 
 NY_TZ = pytz.timezone("America/New_York")
 MARKET_OPEN = dtime(9, 30)
 OPENING_RANGE_MINUTES = 15
 REFRESH_SECONDS = 30
+
+# الأسهم المتوافقة مع الشريعة، مع بورصتها الصحيحة (لازمة لتحليل تريدنج فيو)
+EXCHANGE_MAP = {
+    "INTC": "NASDAQ", "NVDA": "NASDAQ", "GILD": "NASDAQ", "PEP": "NASDAQ",
+    "QCOM": "NASDAQ", "CSCO": "NASDAQ",
+    "XOM": "NYSE", "CVX": "NYSE", "NEM": "NYSE", "FCX": "NYSE", "SLB": "NYSE",
+    "KO": "NYSE", "MRK": "NYSE", "OXY": "NYSE", "PG": "NYSE", "HAL": "NYSE",
+    "DVN": "NYSE", "EOG": "NYSE", "CF": "NYSE", "DD": "NYSE",
+}
 
 st.set_page_config(page_title="شاشة حية", layout="wide")
 
@@ -163,17 +173,23 @@ if watch_all:
     st.markdown("###### 🎨 لوحة الأسهم (اضغط على أي سهم لعرضه)")
     board_cols = st.columns(4)
     style_blocks = []
+    TA_ICON = {
+        "STRONG_BUY": "⬆️⬆️", "BUY": "⬆️", "NEUTRAL": "➡️",
+        "SELL": "⬇️", "STRONG_SELL": "⬇️⬇️",
+    }
     for i, wsym in enumerate(WATCHLIST):
         with board_cols[i % 4]:
             tile_key = f"tile_{wsym}"
+            ta = get_technical_outlook(wsym)
+            ta_icon = TA_ICON.get(ta["توصية"], "") if ta else ""
             if wsym in watch_data:
                 d = watch_data[wsym]
                 chg_pct = ((d["last"] - d["open"]) / d["open"]) * 100 if d["open"] else 0
                 bg = "#0a8a3f" if chg_pct >= 0 else "#d0332f"
-                label = f"{wsym}\n{d['last']:.2f}$\n{chg_pct:+.1f}%"
+                label = f"{wsym} {ta_icon}\n{d['last']:.2f}$\n{chg_pct:+.1f}%"
             else:
                 bg = "#9e9e9e"
-                label = f"{wsym}\n—"
+                label = f"{wsym} {ta_icon}\n—"
 
             with st.container(key=tile_key):
                 if st.button(label, key=f"btn_{wsym}", use_container_width=True):
@@ -185,6 +201,7 @@ if watch_all:
             )
 
     st.markdown(f"<style>{''.join(style_blocks)}</style>", unsafe_allow_html=True)
+    st.caption("⬆️ = التحليل الفني يميل للشراء — ⬇️ = يميل للبيع — ➡️ = محايد")
 
     custom_typed = st.text_input("أو اكتب رمز سهم آخر غير موجود في اللوحة", value="")
     if custom_typed.strip():
@@ -219,6 +236,40 @@ def send_ntfy_alert(topic: str, title: str, message: str) -> bool:
         return True
     except Exception:
         return False
+
+
+@st.cache_data(ttl=120)
+def get_technical_outlook(sym: str):
+    """يجيب تقييماً فنياً جاهزاً من تريدنج فيو (شراء/بيع/محايد)
+    مع عدد المؤشرات المؤيدة لكل اتجاه. محفوظ مؤقتاً لمدة دقيقتين
+    (مو كل 30 ثانية زي السعر)، لأن التحليل الفني لا يتغير بهذا التكرار،
+    وتجنباً لأي ضغط غير ضروري على المصدر."""
+    exchange = EXCHANGE_MAP.get(sym, "NASDAQ")
+    try:
+        handler = TA_Handler(
+            symbol=sym,
+            screener="america",
+            exchange=exchange,
+            interval=Interval.INTERVAL_15_MINUTES,
+        )
+        summary = handler.get_analysis().summary
+        return {
+            "توصية": summary.get("RECOMMENDATION", "غير متاح"),
+            "شراء": summary.get("BUY", 0),
+            "بيع": summary.get("SELL", 0),
+            "محايد": summary.get("NEUTRAL", 0),
+        }
+    except Exception:
+        return None
+
+
+TECHNICAL_LABELS = {
+    "STRONG_BUY": ("شراء قوي 🟢🟢", "#0a8a3f"),
+    "BUY": ("شراء 🟢", "#22c55e"),
+    "NEUTRAL": ("محايد ⚪", "#9e9e9e"),
+    "SELL": ("بيع 🔴", "#ef4444"),
+    "STRONG_SELL": ("بيع قوي 🔴🔴", "#b91c1c"),
+}
 
 
 def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
@@ -369,6 +420,26 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# بطاقة التحليل الفني (تريدنج فيو) — تقييم جاهز شراء/بيع/محايد
+outlook = get_technical_outlook(symbol)
+if outlook:
+    label, badge_color = TECHNICAL_LABELS.get(outlook["توصية"], (outlook["توصية"], "#9e9e9e"))
+    st.markdown(
+        f"""
+        <div style="background:{badge_color}; color:white; border-radius:10px;
+                    padding:10px 16px; margin-top:8px; display:inline-block;">
+            <b>📊 التحليل الفني: {label}</b><br>
+            <span style="font-size:13px;">
+                مؤيدون للشراء: {outlook['شراء']} — مؤيدون للبيع: {outlook['بيع']} — محايد: {outlook['محايد']}
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption("💡 تحليل فني تلقائي من تريدنج فيو، يتحدث كل دقيقتين تقريباً — للمراجعة فقط، وليس توصية استثمارية")
+else:
+    st.caption("📊 التحليل الفني غير متاح حالياً لهذا السهم")
 
 # نسبة المخاطرة إلى العائد المتوقعة بناءً على مستويات الدخول
 # والوقف والهدف المحسوبة تلقائياً
