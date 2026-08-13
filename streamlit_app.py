@@ -37,6 +37,14 @@ EXCHANGE_MAP = {
     "DVN": "NYSE", "EOG": "NYSE", "CF": "NYSE", "DD": "NYSE",
 }
 
+TECHNICAL_LABELS = {
+    "STRONG_BUY": ("شراء قوي 🟢🟢", "#0a8a3f"),
+    "BUY": ("شراء 🟢", "#22c55e"),
+    "NEUTRAL": ("محايد ⚪", "#9e9e9e"),
+    "SELL": ("بيع 🔴", "#ef4444"),
+    "STRONG_SELL": ("بيع قوي 🔴🔴", "#b91c1c"),
+}
+
 st.set_page_config(page_title="شاشة حية", layout="wide")
 
 # تحديث داخلي حقيقي كل 30 ثانية — بلا إعادة تحميل الصفحة بالكامل،
@@ -145,6 +153,31 @@ def fetch_and_prepare(sym: str):
     return session, range_high, range_low, is_last_trading_day
 
 
+@st.cache_data(ttl=120)
+def get_technical_outlook(sym: str):
+    """يجيب تقييماً فنياً جاهزاً من تريدنج فيو (شراء/بيع/محايد)
+    مع عدد المؤشرات المؤيدة لكل اتجاه. محفوظ مؤقتاً لمدة دقيقتين
+    (مو كل 30 ثانية زي السعر)، لأن التحليل الفني لا يتغير بهذا التكرار،
+    وتجنباً لأي ضغط غير ضروري على المصدر."""
+    exchange = EXCHANGE_MAP.get(sym, "NASDAQ")
+    try:
+        handler = TA_Handler(
+            symbol=sym,
+            screener="america",
+            exchange=exchange,
+            interval=Interval.INTERVAL_15_MINUTES,
+        )
+        summary = handler.get_analysis().summary
+        return {
+            "توصية": summary.get("RECOMMENDATION", "غير متاح"),
+            "شراء": summary.get("BUY", 0),
+            "بيع": summary.get("SELL", 0),
+            "محايد": summary.get("NEUTRAL", 0),
+        }
+    except Exception:
+        return None
+
+
 # نجيب بيانات كل الأسهم مرة واحدة فقط (مو مرتين) لو "راقب كل الأسهم"
 # مفعّلة — نفس البيانات تُستخدم للوحة الألوان ولفحص الاختراقات معاً،
 # لتفادي مضاعفة عدد الطلبات لياهو فاينانس بلا داعٍ
@@ -237,39 +270,6 @@ def send_ntfy_alert(topic: str, title: str, message: str) -> bool:
     except Exception:
         return False
 
-
-@st.cache_data(ttl=120)
-def get_technical_outlook(sym: str):
-    """يجيب تقييماً فنياً جاهزاً من تريدنج فيو (شراء/بيع/محايد)
-    مع عدد المؤشرات المؤيدة لكل اتجاه. محفوظ مؤقتاً لمدة دقيقتين
-    (مو كل 30 ثانية زي السعر)، لأن التحليل الفني لا يتغير بهذا التكرار،
-    وتجنباً لأي ضغط غير ضروري على المصدر."""
-    exchange = EXCHANGE_MAP.get(sym, "NASDAQ")
-    try:
-        handler = TA_Handler(
-            symbol=sym,
-            screener="america",
-            exchange=exchange,
-            interval=Interval.INTERVAL_15_MINUTES,
-        )
-        summary = handler.get_analysis().summary
-        return {
-            "توصية": summary.get("RECOMMENDATION", "غير متاح"),
-            "شراء": summary.get("BUY", 0),
-            "بيع": summary.get("SELL", 0),
-            "محايد": summary.get("NEUTRAL", 0),
-        }
-    except Exception:
-        return None
-
-
-TECHNICAL_LABELS = {
-    "STRONG_BUY": ("شراء قوي 🟢🟢", "#0a8a3f"),
-    "BUY": ("شراء 🟢", "#22c55e"),
-    "NEUTRAL": ("محايد ⚪", "#9e9e9e"),
-    "SELL": ("بيع 🔴", "#ef4444"),
-    "STRONG_SELL": ("بيع قوي 🔴🔴", "#b91c1c"),
-}
 
 
 def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
