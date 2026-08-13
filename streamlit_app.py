@@ -75,21 +75,34 @@ watch_all = st.checkbox(
 )
 
 
-def fetch_and_prepare(sym: str):
+def fetch_raw_data(sym: str):
+    """يجيب آخر 5 أيام تداول كاملة (بيانات دقيقة بدقيقة) دفعة واحدة،
+    حتى نقدر نختار أي يوم منها للمراجعة، مو بس اليوم الحالي."""
     ticker = yf.Ticker(sym)
-    data = ticker.history(period="1d", interval="1m")
+    data = ticker.history(period="5d", interval="1m")
     if data.empty:
-        return None, None, None
-
+        return None
     data.index = data.index.tz_convert(NY_TZ)
-    today_ny = datetime.now(NY_TZ).date()
-    open_start = NY_TZ.localize(datetime.combine(today_ny, MARKET_OPEN))
-    open_end = open_start + pd.Timedelta(minutes=OPENING_RANGE_MINUTES)
+    return data
 
-    session = data[data.index >= open_start]
+
+def available_trading_dates(data: pd.DataFrame):
+    """قائمة أيام التداول المتوفرة فعلياً في البيانات، من الأحدث للأقدم."""
+    if data is None or data.empty:
+        return []
+    dates = sorted(set(data.index.date), reverse=True)
+    return dates
+
+
+def extract_session_for_date(data: pd.DataFrame, target_date):
+    """يستخرج جلسة يوم تداول محدد من البيانات، ويحسب نطاق الافتتاح له."""
+    day_start = NY_TZ.localize(datetime.combine(target_date, MARKET_OPEN))
+    day_end = day_start + pd.Timedelta(hours=7)
+    session = data[(data.index >= day_start) & (data.index < day_end)]
     if session.empty:
         return None, None, None
 
+    open_end = day_start + pd.Timedelta(minutes=OPENING_RANGE_MINUTES)
     opening_window = session[session.index < open_end]
     if opening_window.empty:
         opening_window = session.iloc[:15]
@@ -99,13 +112,36 @@ def fetch_and_prepare(sym: str):
     return session, range_high, range_low
 
 
+def fetch_and_prepare(sym: str):
+    """نسخة مبسّطة تُستخدم لمراقبة كل الأسهم معاً (تاخذ دائماً آخر
+    يوم تداول متوفر تلقائياً، بدون خيار اختيار تاريخ)."""
+    data = fetch_raw_data(sym)
+    if data is None:
+        return None, None, None, False
+
+    today_ny = datetime.now(NY_TZ).date()
+    session, range_high, range_low = extract_session_for_date(data, today_ny)
+    is_last_trading_day = False
+
+    if session is None:
+        dates = available_trading_dates(data)
+        if not dates:
+            return None, None, None, False
+        session, range_high, range_low = extract_session_for_date(data, dates[0])
+        is_last_trading_day = True
+        if session is None:
+            return None, None, None, False
+
+    return session, range_high, range_low, is_last_trading_day
+
+
 # نجيب بيانات كل الأسهم مرة واحدة فقط (مو مرتين) لو "راقب كل الأسهم"
 # مفعّلة — نفس البيانات تُستخدم للوحة الألوان ولفحص الاختراقات معاً،
 # لتفادي مضاعفة عدد الطلبات لياهو فاينانس بلا داعٍ
 watch_data = {}
 if watch_all:
     for wsym in WATCHLIST:
-        w_session, w_high, w_low = fetch_and_prepare(wsym)
+        w_session, w_high, w_low, _ = fetch_and_prepare(wsym)
         if w_session is None:
             continue
         w_open = float(w_session["Open"].iloc[0])
@@ -256,11 +292,40 @@ if ntfy_topic and watch_all:
     if sent_now:
         st.success(f"✅ تم إرسال تنبيه اختراق لجوالك عن: {', '.join(sent_now)}")
 
-session, range_high, range_low = fetch_and_prepare(symbol)
+raw_data = fetch_raw_data(symbol)
+
+if raw_data is None:
+    st.warning("لا توجد بيانات متاحة لهذا السهم. تحقق من صحة الرمز.")
+    st.stop()
+
+trading_dates = available_trading_dates(raw_data)
+today_ny = datetime.now(NY_TZ).date()
+
+# قائمة اختيار يوم التداول للمراجعة — مفيدة خصوصاً وقت إغلاق السوق
+# لتحليل عدة أيام سابقة قبل الافتتاح القادم، مو بس آخر يوم تلقائياً
+date_labels = []
+for d in trading_dates:
+    label = d.strftime("%Y-%m-%d")
+    if d == today_ny:
+        label += " (اليوم)"
+    date_labels.append(label)
+
+default_idx = 0  # الأحدث دائماً أول عنصر بما إن القائمة مرتبة تنازلياً
+selected_label = st.selectbox("يوم التداول المعروض للتحليل", date_labels, index=default_idx)
+selected_date = trading_dates[date_labels.index(selected_label)]
+
+session, range_high, range_low = extract_session_for_date(raw_data, selected_date)
+is_last_trading_day = selected_date != today_ny
 
 if session is None:
-    st.warning("لا توجد بيانات بعد. تأكد أن السوق مفتوح أو أن رمز السهم صحيح.")
+    st.warning("لا توجد بيانات لهذا اليوم تحديداً. جرّب يوماً آخر من القائمة.")
     st.stop()
+
+if is_last_trading_day:
+    st.info(
+        f"📅 تعرض حالياً شارت يوم **{selected_date.strftime('%Y-%m-%d')}** للمراجعة والتحليل. "
+        "المستويات المحسوبة (دخول/وقف/هدف) خاصة بذلك اليوم فقط."
+    )
 
 stop_loss = (range_high + range_low) / 2
 entry_price = range_high
