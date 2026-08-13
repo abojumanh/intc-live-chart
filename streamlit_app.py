@@ -12,6 +12,8 @@
 """
 
 from datetime import datetime, time as dtime
+import json
+import base64
 
 import pandas as pd
 import requests
@@ -405,10 +407,48 @@ if "trade_log" not in st.session_state:
 
 # صفقاتي المفتوحة — قائمة صفقات فعلية سجّلها المستخدم، كل واحدة
 # لها تنبيهات مستقلة (هدف، وقف، وشمعة اختيارية)
+# تُحفظ بشكل دائم في ملف trades.json داخل مستودع GitHub، حتى تبقى
+# موجودة حتى لو التطبيق أعاد التشغيل أو نام لعدم الاستخدام
+GITHUB_REPO = "abojumanh/intc-live-chart"
+TRADES_FILE_PATH = "trades.json"
+
+
+def load_trades_from_github():
+    try:
+        token = st.secrets["github_token"]
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{TRADES_FILE_PATH}"
+        headers = {"Authorization": f"token {token}"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            content = base64.b64decode(resp.json()["content"]).decode("utf-8")
+            data = json.loads(content)
+            return data.get("trades", []), data.get("counter", 0)
+        return [], 0
+    except Exception:
+        return [], 0
+
+
+def save_trades_to_github(trades, counter):
+    try:
+        token = st.secrets["github_token"]
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{TRADES_FILE_PATH}"
+        headers = {"Authorization": f"token {token}"}
+        get_resp = requests.get(url, headers=headers, timeout=10)
+        sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+        content_str = json.dumps({"trades": trades, "counter": counter}, ensure_ascii=False)
+        content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+        payload = {"message": "تحديث الصفقات", "content": content_b64}
+        if sha:
+            payload["sha"] = sha
+        requests.put(url, headers=headers, json=payload, timeout=10)
+    except Exception:
+        pass
+
+
 if "my_trades" not in st.session_state:
-    st.session_state.my_trades = []
-if "trade_id_counter" not in st.session_state:
-    st.session_state.trade_id_counter = 0
+    loaded_trades, loaded_counter = load_trades_from_github()
+    st.session_state.my_trades = loaded_trades
+    st.session_state.trade_id_counter = loaded_counter
 
 
 # مراقبة كل أسهم القائمة معاً (وضع اختياري) — نستخدم watch_data
@@ -460,6 +500,7 @@ with st.expander("➕ سجّل صفقة جديدة"):
                 "target": trade_target if trade_target > 0 else None,
                 "candle_alerts": candle_alert_enabled,
             })
+            save_trades_to_github(st.session_state.my_trades, st.session_state.trade_id_counter)
             st.success(f"✅ تمت إضافة صفقة {trade_symbol}")
         else:
             st.warning("عبّئ السهم وسعر الدخول والكمية على الأقل")
@@ -507,6 +548,7 @@ else:
 
     if trades_to_remove:
         st.session_state.my_trades = [t for t in st.session_state.my_trades if t["id"] not in trades_to_remove]
+        save_trades_to_github(st.session_state.my_trades, st.session_state.trade_id_counter)
         st.rerun()
 
 raw_data = fetch_raw_data(symbol)
