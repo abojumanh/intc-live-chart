@@ -440,9 +440,11 @@ def save_trades_to_github(trades, counter):
         payload = {"message": "تحديث الصفقات", "content": content_b64}
         if sha:
             payload["sha"] = sha
-        requests.put(url, headers=headers, json=payload, timeout=10)
-    except Exception:
-        pass
+        put_resp = requests.put(url, headers=headers, json=payload, timeout=10)
+        if put_resp.status_code not in (200, 201):
+            st.error(f"⚠️ فشل الحفظ على GitHub — كود: {put_resp.status_code} — {put_resp.text[:300]}")
+    except Exception as e:
+        st.error(f"⚠️ خطأ أثناء الحفظ: {e}")
 
 
 if "my_trades" not in st.session_state:
