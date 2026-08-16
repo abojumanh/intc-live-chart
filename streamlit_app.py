@@ -11,11 +11,12 @@
 ولا تُرسل أي تنبيهات مكررة.
 """
 
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 import json
 import base64
 
 import pandas as pd
+import feedparser
 import requests
 import yfinance as yf
 import plotly.graph_objects as go
@@ -32,11 +33,12 @@ REFRESH_SECONDS = 30
 
 # الأسهم المتوافقة مع الشريعة، مع بورصتها الصحيحة (لازمة لتحليل تريدنج فيو)
 EXCHANGE_MAP = {
-    "INTC": "NASDAQ", "NVDA": "NASDAQ", "GILD": "NASDAQ", "PEP": "NASDAQ",
-    "QCOM": "NASDAQ", "CSCO": "NASDAQ",
-    "XOM": "NYSE", "CVX": "NYSE", "NEM": "NYSE", "FCX": "NYSE", "SLB": "NYSE",
-    "KO": "NYSE", "MRK": "NYSE", "OXY": "NYSE", "PG": "NYSE", "HAL": "NYSE",
-    "DVN": "NYSE", "EOG": "NYSE", "CF": "NYSE", "DD": "NYSE",
+    "INTC": "NASDAQ",
+    "AEYE": "NASDAQ", "MODD": "NASDAQ", "HTFL": "NASDAQ", "RCMT": "NASDAQ",
+    "IMDX": "NASDAQ", "LPTH": "NASDAQ", "ELMT": "NASDAQ", "CPRT": "NASDAQ",
+    "IOVA": "NASDAQ",
+    "BW": "NYSE",
+    "REA": "AMEX", "BUDA": "AMEX",
 }
 
 TECHNICAL_LABELS = {
@@ -65,11 +67,17 @@ st.markdown(
 
 # قائمة أسهمك المفضلة (الشريعة متوافقة)
 WATCHLIST = [
-    "INTC", "NVDA", "XOM", "CVX", "GILD", "NEM", "FCX", "SLB",
-    "PEP", "KO", "MRK", "OXY", "QCOM", "CSCO", "PG", "HAL",
-    "DVN", "EOG", "CF", "DD",
+    "INTC",
+    "AEYE", "MODD", "HTFL", "RCMT", "IMDX", "LPTH",
+    "REA", "BW", "ELMT", "BUDA", "CPRT", "IOVA",
 ]
 CUSTOM_OPTION = "سهم آخر (اكتبه يدوياً)"
+
+# كلمات مفتاحية إنجليزية تدل على خبر إيجابي محتمل (عناوين الأخبار تجي إنجليزي دايماً)
+POSITIVE_NEWS_KEYWORDS = [
+    "beats", "surge", "approval", "upgrade", "raises guidance",
+    "strong buy", "record revenue", "contract win",
+]
 
 # حالة "التسليح" لكل سهم — محفوظة في ذاكرة الجلسة (session_state)،
 # تبقى ثابتة طوال الجلسة ولا تُعاد للصفر إلا عند إغلاق التبويب فعلياً
@@ -80,7 +88,7 @@ if "armed" not in st.session_state:
 # أو اكتب قناة جديدة يدوياً
 NTFY_CHANNELS = ["بدون إشعارات (تعطيل)", "safar-nvda-alerts-9284", "قناة أخرى (اكتبها يدوياً)"]
 
-ntfy_choice = st.selectbox("قناة إشعارات ntfy", NTFY_CHANNELS)
+ntfy_choice = st.selectbox("قناة إشعارات ntfy", NTFY_CHANNELS, index=1)
 
 if ntfy_choice == "قناة أخرى (اكتبها يدوياً)":
     ntfy_topic = st.text_input("اكتب اسم القناة", value="").strip()
@@ -93,6 +101,27 @@ watch_all = st.checkbox(
     "راقب كل أسهم القائمة معاً وأرسل تنبيه لأي اختراق (يحتاج قناة ntfy أعلاه)",
     value=False,
 )
+
+watch_ipos = st.checkbox(
+    "🆕 فعّل تنبيه اكتتابات السوق الأمريكي الجديدة (يحتاج قناة ntfy أعلاه)",
+    value=False,
+)
+
+watch_stock_news = st.checkbox(
+    "📰 فعّل تنبيه الأخبار الإيجابية لأسهم القائمة (يحتاج قناة ntfy أعلاه)",
+    value=False,
+)
+
+# نفحص الاكتتابات والأخبار كل 5 دقائق بس (مو كل 30 ثانية)، حتى ما
+# نتجاوز الحد المجاني لطلبات API
+_now_ts = datetime.now(NY_TZ).timestamp()
+if ntfy_topic and watch_ipos and (_now_ts - st.session_state.last_ipo_check > 300):
+    check_new_ipos_and_notify(ntfy_topic)
+    st.session_state.last_ipo_check = _now_ts
+
+if ntfy_topic and watch_stock_news and (_now_ts - st.session_state.last_news_check > 300):
+    check_stock_news_and_notify(ntfy_topic)
+    st.session_state.last_news_check = _now_ts
 
 
 def fetch_raw_data(sym: str):
@@ -280,12 +309,15 @@ else:
 
 
 
-def send_ntfy_alert(topic: str, title: str, message: str) -> bool:
+def send_ntfy_alert(topic: str, title: str, message: str, click_url: str = "") -> bool:
     try:
+        headers = {"Title": title.encode("utf-8")}
+        if click_url:
+            headers["Click"] = click_url
         requests.post(
             f"https://ntfy.sh/{topic}",
             data=message.encode("utf-8"),
-            headers={"Title": title.encode("utf-8")},
+            headers=headers,
             timeout=5,
         )
         return True
@@ -294,7 +326,78 @@ def send_ntfy_alert(topic: str, title: str, message: str) -> bool:
 
 
 
-def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
+def check_new_ipos_and_notify(topic: str):
+    """يفحص اكتتابات السوق الأمريكي الجديدة (عبر Finnhub) ويرسل تنبيه
+    لكل اكتتاب جديد لم يُرسل عنه تنبيه من قبل. عند الضغط على التنبيه
+    يفتح رابط بحث جاهز عن خبر الاكتتاب."""
+    if not topic:
+        return
+    try:
+        api_key = st.secrets.get("finnhub_api_key", "")
+        if not api_key:
+            return
+        today = datetime.now(NY_TZ).date()
+        from_date = today.isoformat()
+        to_date = (today + timedelta(days=7)).isoformat()
+        url = (
+            f"https://finnhub.io/api/v1/calendar/ipo"
+            f"?from={from_date}&to={to_date}&token={api_key}"
+        )
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return
+        ipos = resp.json().get("ipoCalendar", [])
+        for ipo in ipos:
+            symbol = ipo.get("symbol", "")
+            name = ipo.get("name", "")
+            ipo_date = ipo.get("date", "")
+            if not symbol or symbol in st.session_state.seen_ipos:
+                continue
+            st.session_state.seen_ipos.add(symbol)
+            search_query = f"{name} {symbol} IPO".replace(" ", "+")
+            click_url = f"https://www.google.com/search?q={search_query}&tbm=nws"
+            send_ntfy_alert(
+                topic,
+                f"🆕 اكتتاب جديد: {symbol}",
+                f"{name} — تاريخ الاكتتاب المتوقع: {ipo_date}",
+                click_url=click_url,
+            )
+    except Exception:
+        pass
+
+
+def check_stock_news_and_notify(topic: str):
+    """يفحص أخبار كل سهم من قائمة المراقبة عبر RSS، ويرسل تنبيه فقط
+    للأخبار اللي عنوانها يحتوي كلمة مفتاحية إيجابية. عند الضغط على
+    التنبيه يفتح رابط الخبر الأصلي مباشرة."""
+    if not topic:
+        return
+    for sym in WATCHLIST:
+        try:
+            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}&region=US&lang=en-US"
+            feed = feedparser.parse(rss_url)
+            for entry in feed.entries[:5]:
+                link = entry.get("link", "")
+                title = entry.get("title", "")
+                if not link or link in st.session_state.seen_news_links:
+                    continue
+                title_lower = title.lower()
+                matched_keyword = next(
+                    (kw for kw in POSITIVE_NEWS_KEYWORDS if kw in title_lower), None
+                )
+                st.session_state.seen_news_links.add(link)
+                if matched_keyword:
+                    send_ntfy_alert(
+                        topic,
+                        f"📰 خبر إيجابي عن {sym}",
+                        title,
+                        click_url=link,
+                    )
+        except Exception:
+            continue
+
+
+
     """يرسل تنبيهاً مرة واحدة بالضبط عند لحظة الاختراق، ولا يكرره
     إلا بعد ما يرجع السعر تحت مستوى الدخول ثم يخترق من جديد.
     يسجّل أيضاً كل اختراق فعلي في سجل الصفقات."""
@@ -451,6 +554,19 @@ if "my_trades" not in st.session_state:
     loaded_trades, loaded_counter = load_trades_from_github()
     st.session_state.my_trades = loaded_trades
     st.session_state.trade_id_counter = loaded_counter
+
+# رموز الاكتتابات اللي سبق أرسلنا تنبيه عنها (عشان ما نكرر نفس التنبيه)
+if "seen_ipos" not in st.session_state:
+    st.session_state.seen_ipos = set()
+if "last_ipo_check" not in st.session_state:
+    st.session_state.last_ipo_check = 0
+
+# روابط الأخبار اللي سبق أرسلنا تنبيه عنها
+if "seen_news_links" not in st.session_state:
+    st.session_state.seen_news_links = set()
+if "last_news_check" not in st.session_state:
+    st.session_state.last_news_check = 0
+
 
 
 # مراقبة كل أسهم القائمة معاً (وضع اختياري) — نستخدم watch_data
