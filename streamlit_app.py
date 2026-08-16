@@ -112,17 +112,6 @@ watch_stock_news = st.checkbox(
     value=False,
 )
 
-# نفحص الاكتتابات والأخبار كل 5 دقائق بس (مو كل 30 ثانية)، حتى ما
-# نتجاوز الحد المجاني لطلبات API
-_now_ts = datetime.now(NY_TZ).timestamp()
-if ntfy_topic and watch_ipos and (_now_ts - st.session_state.last_ipo_check > 300):
-    check_new_ipos_and_notify(ntfy_topic)
-    st.session_state.last_ipo_check = _now_ts
-
-if ntfy_topic and watch_stock_news and (_now_ts - st.session_state.last_news_check > 300):
-    check_stock_news_and_notify(ntfy_topic)
-    st.session_state.last_news_check = _now_ts
-
 
 def fetch_raw_data(sym: str):
     """يجيب آخر 5 أيام تداول كاملة (بيانات دقيقة بدقيقة) دفعة واحدة،
@@ -397,7 +386,20 @@ def check_stock_news_and_notify(topic: str):
             continue
 
 
+# نفحص الاكتتابات والأخبار كل 5 دقائق بس (مو كل 30 ثانية)، حتى ما
+# نتجاوز الحد المجاني لطلبات API
+_now_ts = datetime.now(NY_TZ).timestamp()
+if ntfy_topic and watch_ipos and (_now_ts - st.session_state.last_ipo_check > 300):
+    check_new_ipos_and_notify(ntfy_topic)
+    st.session_state.last_ipo_check = _now_ts
 
+if ntfy_topic and watch_stock_news and (_now_ts - st.session_state.last_news_check > 300):
+    check_stock_news_and_notify(ntfy_topic)
+    st.session_state.last_news_check = _now_ts
+
+
+
+def check_breakout_and_notify(sym: str, last: float, entry: float, stop: float, target: float, topic: str):
     """يرسل تنبيهاً مرة واحدة بالضبط عند لحظة الاختراق، ولا يكرره
     إلا بعد ما يرجع السعر تحت مستوى الدخول ثم يخترق من جديد.
     يسجّل أيضاً كل اختراق فعلي في سجل الصفقات."""
