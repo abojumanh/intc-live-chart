@@ -1,1 +1,1 @@
-{"trades": [{"id": 2, "symbol": "ELMT", "entry": 19.2, "qty": 77.0, "stop": 18.9, "target": 19.8, "candle_alerts": true}, {"id": 3, "symbol": "AEYE", "entry": 8.37, "qty": 276.0, "stop": 7.9, "target": 8.8, "candle_alerts": true}], "counter": 3}
+{"trades": [{"id": 3, "symbol": "AEYE", "entry": 8.37, "qty": 276.0, "stop": 7.9, "target": 8.8, "candle_alerts": true}], "counter": 3}
