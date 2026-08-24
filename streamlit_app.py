@@ -471,6 +471,51 @@ def check_target_proximity_and_notify(trade_id: str, sym: str, last: float, entr
     return False
 
 
+def check_option_and_notify(option_id: str, sym: str, opt_type: str, current: float, strike: float, target_price_opt, stop_price_opt, topic: str):
+    """مؤشر سريع تقريبي لعقود الخيارات — يقارن سعر السهم الأساسي
+    بسعر الإضراب (Strike)، مو سعر العقد (البريميوم) نفسه. للمراجعة
+    فقط، ليس ربحاً/خسارة فعلية بالدولار."""
+    direction_word = "فوق" if opt_type == "Call" else "تحت"
+    is_favorable = (current >= strike) if opt_type == "Call" else (current <= strike)
+    key_status = f"optstatus_{option_id}"
+    was_favorable = st.session_state.armed.get(key_status)
+
+    if was_favorable is None:
+        st.session_state.armed[key_status] = is_favorable
+    elif is_favorable and not was_favorable:
+        msg = (
+            f"السعر الحالي: {current:.2f}$ — صار {direction_word} سعر الإضراب ({strike:.2f}$)\n"
+            f"⚠️ مؤشر تقريبي فقط، مو ربحاً فعلياً بالدولار — راجع سعر العقد نفسه قبل أي قرار"
+        )
+        send_ntfy_alert(topic, f"📈 عقدك يتحسن: {sym} {opt_type}", msg)
+        st.session_state.armed[key_status] = True
+    elif not is_favorable and was_favorable:
+        msg = f"السعر الحالي: {current:.2f}$ — رجع {('تحت' if opt_type == 'Call' else 'فوق')} سعر الإضراب ({strike:.2f}$)"
+        send_ntfy_alert(topic, f"📉 عقدك تراجع: {sym} {opt_type}", msg)
+        st.session_state.armed[key_status] = False
+
+    if target_price_opt:
+        key_t = f"opttarget_{option_id}"
+        target_hit = current >= target_price_opt if opt_type == "Call" else current <= target_price_opt
+        if target_hit and not st.session_state.armed.get(key_t, False):
+            msg = f"السهم وصل هدفك ({target_price_opt:.2f}$) — راجع عقدك الآن"
+            send_ntfy_alert(topic, f"🎯 اقتراب من هدف عقدك: {sym} {opt_type}", msg)
+            st.session_state.armed[key_t] = True
+        elif not target_hit:
+            st.session_state.armed[key_t] = False
+
+    if stop_price_opt:
+        key_s = f"optstop_{option_id}"
+        stop_hit = current <= stop_price_opt if opt_type == "Call" else current >= stop_price_opt
+        if stop_hit and not st.session_state.armed.get(key_s, False):
+            msg = f"السهم وصل وقفك ({stop_price_opt:.2f}$) — راجع عقدك الآن"
+            send_ntfy_alert(topic, f"⚠️ اقتراب من وقف عقدك: {sym} {opt_type}", msg)
+            st.session_state.armed[key_s] = True
+        elif not stop_hit:
+            st.session_state.armed[key_s] = False
+
+
+
 def check_candle_alert(trade_id: str, sym: str, candle_df: pd.DataFrame, topic: str):
     """ينبّه عند بداية كل شمعة جديدة (وملخص إغلاق الشمعة السابقة)،
     بنفس حجم الشمعة المختار حالياً في الشارت الرئيسي."""
@@ -556,6 +601,48 @@ if "my_trades" not in st.session_state:
     loaded_trades, loaded_counter = load_trades_from_github()
     st.session_state.my_trades = loaded_trades
     st.session_state.trade_id_counter = loaded_counter
+
+OPTIONS_FILE_PATH = "options.json"
+
+
+def load_options_from_github():
+    try:
+        token = st.secrets["github_token"]
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{OPTIONS_FILE_PATH}"
+        headers = {"Authorization": f"token {token}"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            content = base64.b64decode(resp.json()["content"]).decode("utf-8")
+            data = json.loads(content)
+            return data.get("options", []), data.get("counter", 0)
+        return [], 0
+    except Exception:
+        return [], 0
+
+
+def save_options_to_github(options_list, counter):
+    try:
+        token = st.secrets["github_token"]
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{OPTIONS_FILE_PATH}"
+        headers = {"Authorization": f"token {token}"}
+        get_resp = requests.get(url, headers=headers, timeout=10)
+        sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+        content_str = json.dumps({"options": options_list, "counter": counter}, ensure_ascii=False)
+        content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+        payload = {"message": "تحديث عقود الخيارات", "content": content_b64}
+        if sha:
+            payload["sha"] = sha
+        put_resp = requests.put(url, headers=headers, json=payload, timeout=10)
+        if put_resp.status_code not in (200, 201):
+            st.error(f"⚠️ فشل حفظ العقود على GitHub — كود: {put_resp.status_code} — {put_resp.text[:300]}")
+    except Exception as e:
+        st.error(f"⚠️ خطأ أثناء حفظ العقود: {e}")
+
+
+if "my_options" not in st.session_state:
+    loaded_options, loaded_options_counter = load_options_from_github()
+    st.session_state.my_options = loaded_options
+    st.session_state.option_id_counter = loaded_options_counter
 
 # رموز الاكتتابات اللي سبق أرسلنا تنبيه عنها (عشان ما نكرر نفس التنبيه)
 if "seen_ipos" not in st.session_state:
@@ -671,7 +758,99 @@ else:
         save_trades_to_github(st.session_state.my_trades, st.session_state.trade_id_counter)
         st.rerun()
 
+# قناة تنبيهات منفصلة تماماً لعقود الخيارات، عن قناة الأسهم العادية
+OPTIONS_NTFY_TOPIC = "safar-options-alerts-7419"
+
+st.markdown("### 🎯 عقودي (Options)")
+st.caption(
+    "⚠️ هذا القسم يراقب سعر **السهم الأساسي** مقابل **سعر الإضراب**، مؤشر تقريبي "
+    "سريع فقط — مو سعر العقد (البريميوم) نفسه، ومو ربحاً/خسارة فعلية بالدولار."
+)
+
+with st.expander("➕ سجّل عقد جديد"):
+    ocol1, ocol2, ocol3 = st.columns(3)
+    with ocol1:
+        opt_options = WATCHLIST + [CUSTOM_OPTION]
+        opt_choice = st.selectbox("السهم الأساسي", opt_options, key="new_opt_symbol")
+        if opt_choice == CUSTOM_OPTION:
+            opt_symbol = st.text_input("اكتب رمز السهم", key="new_opt_symbol_custom").upper().strip()
+        else:
+            opt_symbol = opt_choice
+        opt_type = st.radio("نوع العقد", ["Call", "Put"], key="new_opt_type", horizontal=True)
+    with ocol2:
+        opt_strike = st.number_input("سعر الإضراب (Strike) $", min_value=0.0, value=0.0, step=0.5, format="%.2f", key="new_opt_strike")
+        opt_expiry = st.date_input("تاريخ الانتهاء", key="new_opt_expiry")
+    with ocol3:
+        opt_target = st.number_input("هدفك بسعر السهم ($) — اختياري", min_value=0.0, value=0.0, step=0.5, format="%.2f", key="new_opt_target")
+        opt_stop = st.number_input("وقفك بسعر السهم ($) — اختياري", min_value=0.0, value=0.0, step=0.5, format="%.2f", key="new_opt_stop")
+
+    if st.button("إضافة العقد", key="add_option_btn"):
+        if opt_symbol and opt_strike > 0:
+            st.session_state.option_id_counter += 1
+            st.session_state.my_options.append({
+                "id": st.session_state.option_id_counter,
+                "symbol": opt_symbol,
+                "type": opt_type,
+                "strike": opt_strike,
+                "expiry": opt_expiry.isoformat(),
+                "target": opt_target if opt_target > 0 else None,
+                "stop": opt_stop if opt_stop > 0 else None,
+            })
+            save_options_to_github(st.session_state.my_options, st.session_state.option_id_counter)
+            st.success(f"✅ تمت إضافة عقد {opt_symbol} {opt_type}")
+        else:
+            st.warning("عبّئ السهم وسعر الإضراب على الأقل")
+
+if not st.session_state.my_options:
+    st.caption("لا توجد عقود مسجّلة بعد. اضغط أعلاه لإضافة عقدك الأول.")
+else:
+    options_to_remove = []
+    for opt in st.session_state.my_options:
+        o_session, _, _, _ = fetch_and_prepare(opt["symbol"])
+        if o_session is None:
+            st.warning(f"⚠️ لا توجد بيانات حالياً لسهم {opt['symbol']}")
+            continue
+
+        o_last = float(o_session["Close"].iloc[-1])
+        diff = o_last - opt["strike"]
+        favorable = (o_last >= opt["strike"]) if opt["type"] == "Call" else (o_last <= opt["strike"])
+        status_color = "#0a8a3f" if favorable else "#d0332f"
+        status_text = "فوق الإضراب ⬆️" if opt["type"] == "Call" else "تحت الإضراب ⬇️"
+        status_text = status_text if favorable else ("تحت الإضراب ⬇️" if opt["type"] == "Call" else "فوق الإضراب ⬆️")
+
+        oc1, oc2 = st.columns([4, 1])
+        with oc1:
+            st.markdown(
+                f"""
+                <div style="border:1px solid #ddd; border-radius:10px; padding:10px 14px; margin-bottom:6px;">
+                    <b>{opt['symbol']} {opt['type']}</b> — إضراب: {opt['strike']:.2f}$
+                    &nbsp;|&nbsp; ينتهي: {opt['expiry']}
+                    &nbsp;|&nbsp; سعر السهم الحالي: {o_last:.2f}$<br>
+                    <span style="color:{status_color}; font-weight:bold;">
+                        {status_text} (فرق {diff:+.2f}$)
+                    </span>
+                    {f" — هدفك: {opt['target']:.2f}$" if opt['target'] else ""}
+                    {f" — وقفك: {opt['stop']:.2f}$" if opt['stop'] else ""}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with oc2:
+            if st.button("🗑️ أنهيته", key=f"remove_option_{opt['id']}"):
+                options_to_remove.append(opt["id"])
+
+        check_option_and_notify(
+            str(opt["id"]), opt["symbol"], opt["type"], o_last, opt["strike"],
+            opt["target"], opt["stop"], OPTIONS_NTFY_TOPIC,
+        )
+
+    if options_to_remove:
+        st.session_state.my_options = [o for o in st.session_state.my_options if o["id"] not in options_to_remove]
+        save_options_to_github(st.session_state.my_options, st.session_state.option_id_counter)
+        st.rerun()
+
 raw_data = fetch_raw_data(symbol)
+
 
 if raw_data is None:
     st.warning("لا توجد بيانات متاحة لهذا السهم. تحقق من صحة الرمز.")
