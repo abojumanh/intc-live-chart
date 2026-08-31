@@ -1,1 +1,1 @@
-{"options": [], "counter": 1}
+{"options": [{"id": 2, "symbol": "META", "type": "Call", "strike": 4.81, "expiry": "2026-09-04", "target": 6.0, "stop": null}], "counter": 2}
